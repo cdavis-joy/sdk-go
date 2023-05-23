@@ -3559,6 +3559,36 @@ func (s *WorkflowTestSuiteUnitTest) Test_ChildWorkflowAlreadyRunning() {
 	s.Equal("heartbeat_child1 ", result)
 }
 
+func (s *WorkflowTestSuiteUnitTest) Test_ChildWorkflowAlreadyRunning_MockedError() {
+	workflowFn := func(ctx Context) error {
+		ctx1 := WithChildWorkflowOptions(ctx, ChildWorkflowOptions{
+			WorkflowID:            "Test_ChildWorkflowAlreadyRunning",
+			WorkflowRunTimeout:    time.Minute,
+			WorkflowIDReusePolicy: enumspb.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE_FAILED_ONLY,
+		})
+
+		err := ExecuteChildWorkflow(ctx1, testWorkflowHeartbeat, "child1", time.Millisecond).Get(ctx1, nil)
+		return err
+	}
+
+	env := s.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(workflowFn)
+	env.RegisterWorkflow(testWorkflowHeartbeat)
+
+	// Mock that the child workflow will return ChildWorkflowExecutionAlreadyStartedError
+	env.OnWorkflow(testWorkflowHeartbeat, mock.Anything, mock.Anything, mock.Anything).Return("", &ChildWorkflowExecutionAlreadyStartedError{})
+
+	env.ExecuteWorkflow(workflowFn)
+	err := env.GetWorkflowError()
+	var childAlreadyStarted *ChildWorkflowExecutionAlreadyStartedError
+	s.True(errors.As(err, &childAlreadyStarted))
+
+	// This test fails because the error being returned by the child workflow
+	// is being run through the FailureConverter, which doesn't know about ChildWorkflowExecutionAlreadyStartedError.
+	// The error is then being appropriately handled as the child workflow error that it is,
+	// but by that point the error has already been changed to be an ApplicationError by the FailureConverter.
+}
+
 func (s *WorkflowTestSuiteUnitTest) Test_CronWorkflow() {
 
 	failedCount, successCount, lastCompletionResult := 0, 0, 0
